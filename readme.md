@@ -397,7 +397,7 @@ ALTER TABLE lakehouse.silver.big_order_customers ADD COLUMN segment varchar;
 ALTER TABLE lakehouse.silver.big_order_customers RENAME COLUMN name TO customer_name;
 SELECT * FROM lakehouse.silver.big_order_customers LIMIT 3;
 ```
-*(результат: `images/schema-evolution.png`)*
+(images/schema-evolution.png)
 
 
 
