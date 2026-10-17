@@ -418,9 +418,9 @@ SELECT count(*) FROM lakehouse.silver.big_orders; // ура починили
 Я выбрала **Apache Superset**, потому что у него открытый код, ставится в Docker, подключается к Trino, а значит и к Iceberg-таблицам в MinIO без собственных коннекторов. Doris/StarRocks/Spark для одного запроса на `sf1` избыточны, Trino уже справляется.сервисы `superset-database`, `superset-init`, `superset` в `docker-compose.yml`. Подключение `trino://admin@trino:8080/lakehouse` создаётся скриптом `scripts/superset-init.sh`.
 
 Для начала я вошла в интерфейс, который http://localhost:8088, ипользовала логи и пароль admin. После в настройках посмотрела подключения бд, там уже была подключена моя бдшка Trino Lakehouse
- ![бд](скриншот: `images/1.png`)*
+ ![бд](images/1.png)
 После я зашла в SQL Lab и там я выбрала базу «Trino Lakehouse» и схему bronze. Слева отобразились таблицы слоя. Запрос SELECT count(*) FROM bronze.lineitem вернул 6 001 215 строк, то есть то же число, что показал Trino в консоли: Superset читает те же Iceberg-таблицы, которые лежат в хранилище. Запрос SELECT * FROM bronze.orders LIMIT 10 вывел первые строки таблицы заказов
-![график 1](скриншот: `images/2.png`)*
+![график 1](images/2.png)
 
 Из SQL Lab я сохранила результаты запросов как датасеты (Save → Save dataset) и построила графики:
 **Заказы по годам**, Pie Chart, по Bronze-таблице orders: запрос по оси X год, метрика SUM по orders.
