@@ -1,0 +1,164 @@
+services:
+  minio-silo: #объектное хранилище для данных
+    image: pgsty/silo:latest #образ          
+    container_name: minio-silo
+
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+
+    ports: ["9000:9000", "9001:9001"]
+    command: server /data --console-address ":9001" #запуск сервера и консоли
+
+    volumes:
+      - minio-data:/data #пост хранение
+
+    healthcheck: #проверка сервиса           
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || mc ready local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-silo-init: #для создани бакета warehouse
+    image: pgsty/mc:latest
+    container_name: minio-silo-init
+    depends_on:
+      minio-silo:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command: -c "mc alias set m http://minio-silo:9000 minioadmin minioadmin &&
+      mc mb -p m/warehouse" #алиас и бакет
+
+  postgres: #бдшка
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports: ["5432:5432"]
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      retries: 20
+
+  lakekeeper-migrate: #таблицы каталога в бдшке 
+    image: quay.io/lakekeeper/catalog:latest-main
+    container_name: lakekeeper-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: migrate
+    environment:
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://postgres:postgres@postgres:5432/postgres
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://postgres:postgres@postgres:5432/postgres
+      LAKEKEEPER__PG_ENCRYPTION_KEY: NOT-SECURE-KEY
+
+  lakekeeper: #каталог
+    image: quay.io/lakekeeper/catalog:latest-main
+    container_name: lakekeeper
+    depends_on:
+      lakekeeper-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    command: serve
+    environment:
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://postgres:postgres@postgres:5432/postgres
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://postgres:postgres@postgres:5432/postgres
+      LAKEKEEPER__PG_ENCRYPTION_KEY: NOT-SECURE-KEY
+    ports: ["8181:8181"]
+    healthcheck:                    
+      test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  lakekeeper-init: #для создания warehouse в каталоге
+    image: curlimages/curl:latest
+    container_name: lakekeeper-init
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+    volumes:
+      - ./create-warehouse.json:/create-warehouse.json:ro
+      - ./scripts/lakekeeper-init.sh:/lakekeeper-init.sh:ro
+    entrypoint: ["/bin/sh", "/lakekeeper-init.sh"]
+
+  trino: #пишем тут SQL
+    image: trinodb/trino:latest
+    container_name: trino
+    ports: ["8080:8080"]
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+      lakekeeper-init:
+        condition: service_completed_successfully
+      minio-silo:
+        condition: service_healthy
+      minio-silo-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "trino --execute 'SELECT 1' > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
+  superset-database: #бдшка для superset
+    image: postgres:17
+    container_name: superset-database
+    environment:
+      POSTGRES_DB: superset
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: superset
+    volumes:
+      - superset-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset -d superset"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  superset-init: #инициализация superset
+    build:
+      context: ./superset
+    container_name: superset-init
+    depends_on:
+      superset-database:
+        condition: service_healthy
+      trino:
+        condition: service_healthy
+    environment:
+      SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://superset:superset@superset-database:5432/superset
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+      - ./superset/exports:/exports:ro
+      - ./scripts/superset-init.sh:/superset-init.sh:ro
+    entrypoint: ["/bin/sh", "/superset-init.sh"]
+
+  superset: #веб-интерфейс
+    build:
+      context: ./superset              
+    container_name: superset
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    environment:
+      SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://superset:superset@superset-database:5432/superset
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+    ports:
+      - "8088:8088"
+    entrypoint: /bin/sh
+    command: -c "/usr/bin/run-server.sh"
+
+volumes: #тома
+  minio-data:
+  pg-data:
+  superset-db-data:
